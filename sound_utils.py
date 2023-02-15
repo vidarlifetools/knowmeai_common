@@ -1,15 +1,9 @@
-import logging
 import librosa
 import librosa.display
-import sys
 import numpy as np
 import pickle
-#import noisereduce as nr
-#from pydub import AudioSegment
-from array import array
 from utilities.pyrapt import pitch
-#import torch
-
+from scipy.ndimage.interpolation import shift
 
 class sound_feature:
 
@@ -28,6 +22,9 @@ class sound_feature:
         self.noise_reduce = noise_reduce
         self.ampl_normalization = ampl_normalization
         self.use_pitch = use_pitch
+        # frame_step_size in raptparams is set to 0.016
+        self.pitch_buffer = np.zeros((
+            int(feat_size/0.016),), dtype=float)
 
     def get_mfcc(self, samples):
         #def sound_feature(samples, sr, win_size, stp_size, feature_size, n_mfcc, windowing=True, mean_norm=False):
@@ -51,10 +48,14 @@ class sound_feature:
         mfcc = np.resize(mfcc, (mfcc.shape[1] * mfcc.shape[0]))
         return mfcc
     def get_pitch(self, samples):
-        pitch_feats = pitch(samples, self.sr)
+        # Use the last feat_step samples to calculate pitch values and add it to the pitch buffer. The pitch
+        # buffer will contain pitch values for the last feat_size samples
+        pitch_feats = pitch(samples[3*int(self.feat_step*self.sr):4*int(self.feat_step*self.sr)], self.sr)
         # Make it 32 elements to match the feature size when the whole audio sequence is analyzed
         pitch_feats = np.append(pitch_feats, 0.0)
-        return pitch_feats
+        shift(self.pitch_buffer, -8, cval=0.0)
+        self.pitch_buffer[3*int(self.feat_step/0.016):4*int(self.feat_step/0.016)] = pitch_feats
+        return self.pitch_buffer
 
     def get_feature(self, samples):
         feature = self.get_mfcc(samples)
