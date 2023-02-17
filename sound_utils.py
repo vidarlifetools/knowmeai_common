@@ -4,27 +4,39 @@ import numpy as np
 import pickle
 from utilities.pyrapt import pitch
 from scipy.ndimage.interpolation import shift
+from feature_constants import\
+    sound_mean_norm,\
+    sound_windowing,\
+    sound_pre_emphasis,\
+    sound_remove_silent,\
+    sound_noise_reduce,\
+    sound_n_mfcc,\
+    sound_sample_rate,\
+    sound_window_length,\
+    sound_window_step,\
+    sound_feature_length,\
+    sound_feature_step,\
+    sound_ampl_normalization,\
+    sound_use_pitch
 
-class sound_feature:
 
-    def __init__(self, win_size, win_step, feat_size, feat_step, sr, n_mfcc=12, windowing = True,
-                   pre_emphasis=False, mean_normalization = False, noise_reduce=False, ampl_normalization=False,
-                   use_pitch=False):
-        self.win_size = win_size
-        self.win_step = win_step
-        self.feat_size = feat_size
-        self.feat_step = feat_step
-        self.sr = sr
-        self.n_mfcc = n_mfcc
-        self.window = "hann" if windowing else None
-        self.pre_emphasis = pre_emphasis
-        self.mean_normalization = mean_normalization
-        self.noise_reduce = noise_reduce
-        self.ampl_normalization = ampl_normalization
-        self.use_pitch = use_pitch
+class SoundFeature:
+    def __init__(self):
+        self.win_size = sound_window_length
+        self.win_step = sound_window_step
+        self.feat_size = sound_feature_length
+        self.feat_step = sound_feature_step
+        self.sr = sound_sample_rate
+        self.n_mfcc = sound_n_mfcc
+        self.window = "hann" if sound_windowing else None
+        self.pre_emphasis = sound_pre_emphasis
+        self.mean_normalization = sound_mean_norm
+        self.noise_reduce = sound_noise_reduce
+        self.ampl_normalization = sound_ampl_normalization
+        self.use_pitch = sound_use_pitch
         # frame_step_size in raptparams is set to 0.016
         self.pitch_buffer = np.zeros((
-            int(feat_size/0.016),), dtype=float)
+            int(self.feat_size/0.016),), dtype=float)
 
     def get_mfcc(self, samples):
         #def sound_feature(samples, sr, win_size, stp_size, feature_size, n_mfcc, windowing=True, mean_norm=False):
@@ -65,7 +77,7 @@ class sound_feature:
         return feature
 
 
-class sound_prediction:
+class SoundPrediction:
     def __init__(self, model_filename_source, model_filename_client, model_filename_sound, histogram_depth, histogram_limit = 0.0):
         with open(model_filename_source, "rb") as file:
             self.source_model = pickle.load(file)

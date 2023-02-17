@@ -1,15 +1,45 @@
-# Based on recognize_gesture.py in machine-learning
-
 import numpy as np
 import pickle
 import vg
 import math
-
 from constants import *
+import mediapipe as mp
+from feature_constants import \
+    mp_pose_min_detection_confidence,\
+    mp_pose_min_tracking_confidence
+from feature_constants import keypoint_mapping_table
+
+
+# Based on recognize_gesture.py in machine-learning
+class PoseFeature:
+    def __init__(self):
+        # TODO Initiate tha class depending on static_image _mode
+        self.mp_pose = mp.solutions.pose.Pose(
+            # static_image_mode=static_image_mode,
+            # model_complexity=self.config.model_complexity,
+            # enable_segmentation=self.config.enable_segmentation,
+            min_detection_confidence=mp_pose_min_detection_confidence,
+            min_tracking_confidence=mp_pose_min_tracking_confidence
+        )
+
+    def get(self, image):
+        results = self.mp_pose.process(image)
+        if results.pose_world_landmarks.landmark:
+            pose_3d = np.zeros((17, 5), dtype=np.float32)
+            for i, landmark in enumerate(results.pose_world_landmarks.landmark):
+                if keypoint_mapping_table[i] != -1:
+                    conf = landmark.visibility if (keypoint_mapping_table[i] > 12 and landmark.visibility > 0.8) or (
+                                keypoint_mapping_table[i] <= 12) else 0.0
+                    pose_3d[keypoint_mapping_table[i], :] = [landmark.x * 1000.0, landmark.y * 1000.0, landmark.z * 1000.0,
+                                                    conf, 0.0]
+            return pose_3d, True, image
+        else:
+            return None, False, image
+
 #from utilities.recognize_gesture import compute_feature_vector_pose,\
 #    predict_pose_class, compute_feature_vector_gesture, initialize_buffer_info,\
 #    get_sequence_from_buffer_info, update_buffer_info
-class gesture_prediction:
+class GesturePrediction:
     def __init__(self, model_filename_pose, model_filename_gesture, logger):
         with open(model_filename_pose, "rb") as file:
             self.pose_model = pickle.load(file)
@@ -67,7 +97,7 @@ class gesture_prediction:
         # If thread is not ended
         nof_results = np.array([len(class_nos)], dtype=np.uint8)
 
-        return class_nos
+        return class_nos, class_probs
 
 
 
