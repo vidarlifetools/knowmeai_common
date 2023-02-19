@@ -4,8 +4,8 @@ from constants import *
 import os
 import json
 
-class compound_prediction:
-    def __init__(self, model_filename_pose, model_filename_gesture, logger):
+class CompoundPrediction:
+    def __init__(self, model_filename_compound, logger):
         with open(model_filename_pose, "rb") as file:
             self.pose_model = pickle.load(file)
         with open(model_filename_gesture, "rb") as file:
@@ -14,7 +14,7 @@ class compound_prediction:
         self.logger = logger
         self.buffer_info = initialize_buffer_info()
 
-    def get_class(self, gesture, expression, sound):
+    def get(self, gesture, expression, sound):
 
         # Load person dict and labels dict
         with open(os.path.join(base_for_person, person, ML_CAT, LABELLED_PERSON_FILENAME), 'r') as infile:
