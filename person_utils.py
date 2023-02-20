@@ -9,8 +9,8 @@ import json
 
 COCO_PERSON_CLASS = 1
 
-class Person:
-    def __init__(self, tracking, tracking_bbox, tracking_first_frame, device = None, *args):
+class PersonBbox:
+    def __init__(self, tracking, tracking_bbox, tracking_first_frame, scale = 1.0, device = None, *args):
         self.people_detector = torchvision.models.detection.fasterrcnn_resnet50_fpn(
             pretrained=True
         )
@@ -25,13 +25,33 @@ class Person:
         self.people_detector.to(self.device)
         self.people_detector.eval()
 
+        self.scale = scale
         self.tracking = tracking
         self.tracker = cv2.TrackerKCF_create()
         self.tracking_bbox = tracking_bbox
         self.tracking_first_frame = tracking_first_frame
         self.frame_no = 0
 
+    def scale_image(self, image):
+        # resize image
+        width = int(image.shape[1] * self.scale)
+        height = int(image.shape[0] * self.scale)
+        dim = (width, height)
+        resized = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+        return resized
+
+    def scale_bbox(self, bbox):
+        for i in range(len(bbox)):
+            bbox[i] = int(bbox[i] * self.scale)
+        return bbox
+
+    def rescale_bbox(self, bbox):
+        for i in range(len(bbox)):
+            bbox[i] = int(bbox[i] / self.scale)
+        return bbox
+
     def detect(self, color, threshold = 0.5):
+        color = self.scale_image(color)
         if self.tracking:
             if self.tracking_first_frame == self.frame_no:
                 self.init_tracker(color, self.tracking_bbox)
@@ -41,6 +61,7 @@ class Person:
                 bbox = self.detect_person(color, threshold=threshold)
         else:
             bbox = self.detect_person(color, threshold=threshold)
+        bbox = self.rescale_bbox(bbox)
         self.frame_no += 1
         return bbox
     def detect_person(self, color, threshold=0.5):
@@ -74,10 +95,12 @@ class Person:
         #self.tracker = Sort(max_age=10, min_hits=2)
         #self.tracker.update(bbox)
 
+        resized_img = self.scale_image(first_frame)
+        resized_bbox = self.scale_bbox(bbox)
         # New KCF tracker initialise with the first frame and the bbox
-        ok = self.tracker.init(first_frame, [bbox[0], bbox[1],
-                                            bbox[2]-bbox[0],
-                                            bbox[3]-bbox[1]])
+        ok = self.tracker.init(resized_img, [resized_bbox[0], resized_bbox[1],
+                                            resized_bbox[2]-resized_bbox[0],
+                                            resized_bbox[3]-resized_bbox[1]])
         # If init_tracking is called, tracking is started
         self.tracking = True
 
