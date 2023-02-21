@@ -46,8 +46,9 @@ class PersonBbox:
         return bbox
 
     def rescale_bbox(self, bbox):
-        for i in range(len(bbox)):
-            bbox[i] = int(bbox[i] / self.scale)
+        if bbox:
+            for i in range(len(bbox)):
+                bbox[i] = int(bbox[i] / self.scale)
         return bbox
 
     def detect(self, color, threshold = 0.5):
@@ -87,8 +88,10 @@ class PersonBbox:
         ):
             if (pred_score > threshold) and (pred_class == COCO_PERSON_CLASS):
                 person_boxes.append(pred_box)
-
-        return person_boxes[0]
+        if len(person_boxes) > 0:
+            return person_boxes[0]
+        else:
+            return None
     def init_tracker(self, first_frame, bbox):
         # Old SORT tracker
         #KalmanBoxTracker.count = 0
