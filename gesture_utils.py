@@ -23,7 +23,7 @@ class PoseFeature:
         )
 
     def get(self, image):
-        results = self.mp_pose.process(image)
+        results = self.mp_pose.process(image)S
         if results.pose_world_landmarks:
         #if results.pose_world_landmarks.landmark:
             pose_3d = np.zeros((17, 5), dtype=np.float32)
