@@ -9,7 +9,7 @@ from feature_constants import\
     mp_face_min_detection_confidence,\
     mp_face_min_tracking_confidence
 
-class ExprFeature:
+class FaceFeature:
     def __init__(self):
         self.config = None
         self.mediapipe_face = mp.solutions.face_mesh.FaceMesh(
@@ -69,7 +69,7 @@ class Expr(DataModule):
         cv2.imshow('MediaPipe Expr Mesh', cv2.flip(image, 1))
         cv2.waitKey(1)
 """
-class ExprPrediction:
+class FacePrediction:
     def __init__(self, model_filename_expression):
         with open(model_filename_expression, "rb") as file:
             self.expr_model = pickle.load(file)

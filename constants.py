@@ -17,15 +17,15 @@ from dataclasses import dataclass
 @dataclass
 class FaceData:
     valid: bool
-    face: list
     landmarks: list
+    bbox_person: list
 
 
 @dataclass
 class SkeletonData:
     valid: bool
-    skeleton: list
-    skeleton_2d: list
+    keypoints: list
+    bbox_person: list
 
 
 @dataclass
