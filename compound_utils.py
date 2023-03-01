@@ -4,148 +4,218 @@ from constants import *
 import os
 import json
 
+
 class CompoundPrediction:
-    def __init__(self, model_filename_compound, logger):
-        with open(model_filename_pose, "rb") as file:
-            self.pose_model = pickle.load(file)
-        with open(model_filename_gesture, "rb") as file:
-            self.gesture_model = pickle.load(file)
-        self.nof_pose_classes = len(self.pose_model.classes_)
-        self.logger = logger
-        self.buffer_info = initialize_buffer_info()
+    def __init__(self, model_filename_compound, model_filename_expression, model_filename_gesture, model_filename_sound):
+        self.model_filename_compound = model_filename_compound
+        self.nof_face_classes = get_nof_model_labels(model_filename_expression)
+        self.nof_gesture_classes = get_nof_model_labels(model_filename_gesture)
+        self.nof_sound_classes = get_nof_model_labels(model_filename_sound)
 
-    def get(self, gesture, expression, sound):
 
-        # Load person dict and labels dict
-        with open(os.path.join(base_for_person, person, ML_CAT, LABELLED_PERSON_FILENAME), 'r') as infile:
-            person_dict = json.load(infile)
-        label_json_filename = person_dict['labels_file']
-        with open(label_json_filename, 'r') as infile:
-            labels_dict = json.load(infile)
+        self.compound_model = load_model(self.model_filename_compound)
 
-        # Get nr of labels for each of the recognition modules -> face, gesture and sound
-        nof_expr_classes, nof_gesture_classes, nof_sound_classes = get_nof_submodel_labels(labels_dict)
+    def get_class(self, sequence_gesture_classes, sequence_expr_classes, sequence_sound_classes,
+                  gesture_sequence, expr_frame_nos, sound_frame_nos, frame_sequence, current_frame, logger):
 
-        # Load compound model
-        compound_model = load_compound_module(person_dict['model_filename_compound'])
+        fts, fts_valid = compute_feature_vector_compound(
+            expr_frame_nos, sequence_expr_classes, self.nof_face_classes,
+                gesture_sequence, sequence_gesture_classes, self.nof_gesture_classes,
+                sound_frame_nos, sequence_sound_classes, self.nof_sound_classes,
+                frame_sequence, logger=logger, timestamp=current_frame)
 
-        # Initialize empty arrays
-        expression_frame_nos = []
-        expression_classes = []
-        gesture_frame_sequences = []
-        gesture_classes = []
-        sound_frame_nos = []
-        sound_classes = []
+        # Reshape array for model prediction
+        fts = np.array(fts).reshape(1, -1)
 
-        # Initialize time_stamps
-        if not INCLUDE_SOUND:
-            timestamp_sound = [-1]
-        if not INCLUDE_FACE_EXPR:
-            timestamp_face = [-1]
-        if not INCLUDE_GESTURE:
-            timestamp_gesture = [-1]
+        if not fts_valid:
+            class_nos = np.array([MISSING_CLASS], dtype=np.uint8)
+            class_scores = np.array([0], dtype=np.float16)
+        else:
+            class_nos = np.array(self.compound_model.predict(fts), dtype=np.uint8)
+            class_scores = np.array(self.compound_model.decision_function(fts), dtype=np.float16).ravel()
 
-        # TODO Offset, timestamp_count should be constants?
-        while True:
-            # Filling in timestamp and class information related to face expression
-            if INCLUDE_FACE_EXPR:
-                timestamp_face, _, class_face_nos, class_face_probs = get_class_stream(sub_face_socket,
-                                                                                       offset=10,
-                                                                                       timestamp_count=1)
-                expression_frame_nos += [(int(np.round(timestamp_face[0] * frame_rate)))]
-                expression_classes += [class_face_nos[0]]
+        return class_nos[0]
 
-            # Filling in timestamp and class information related to gesture
-            if INCLUDE_GESTURE:
-                timestamp_seq_gesture, _, class_gesture_nos, class_gesture_probs = get_class_stream(sub_gesture_socket,
-                                                                                                    offset=8,
-                                                                                                    timestamp_count=2)
-                timestamp_gesture = [timestamp_seq_gesture[1]]
-                gesture_frame_sequences += [[int(np.round(t * frame_rate)) for t in timestamp_seq_gesture]]
-                gesture_classes += [class_gesture_nos[0]]
 
-            # Filling in timestamp and class information related to sound expression
-            if INCLUDE_SOUND:
-                timestamp_sound, _, class_sound_nos, class_sound_probs = get_class_stream(sub_sound_socket,
-                                                                                          offset=6,
-                                                                                          timestamp_count=1)
-                sound_frame_nos += [(int(np.round(timestamp_sound[0] * frame_rate)))]
-                sound_classes += [class_sound_nos[0]]
+class CompoundBuffer:
+    def __init__(self, compound_window_len):
+        self.compound_window_len = compound_window_len
+        self.next_sequence = [0, self.compound_window_len]
 
-            # Get frame number
-            if INCLUDE_GESTURE:
-                frame_no = int(np.round(timestamp_gesture[0] * frame_rate))
-            elif INCLUDE_FACE_EXPR:
-                frame_no = int(np.round(timestamp_face[0] * frame_rate))
-            elif INCLUDE_SOUND:
-                frame_no = int(np.round(timestamp_sound[0] * frame_rate))
+        self.sound = {'frames': [], 'classes': [], 'is_full': False}
+        self.face = {'frames': [], 'classes': [], 'is_full': False}
+        self.gesture = {'frames': [], 'classes': [], 'is_full': False}
 
-            # Do compound recognition if buffer is long enough
-            if do_compound_recognition(frame_no):
-                # Check that timestamp face and timestamp gesture are the same, otherwise AssertionError is raised
-                if INCLUDE_FACE_EXPR and INCLUDE_GESTURE:
-                    assert abs(timestamp_face[0] - timestamp_gesture[0]) < 0.00001
+    def add_sound_class(self, sound_class, frame_no):
+        self.sound['classes'] += [sound_class]
+        self.sound['frames'] += [frame_no]
+        if len(self.sound['frames']) >= self.compound_window_len:
+            self.sound['is_full'] = True
 
-                # Get window feature vector compound, current frame nr is the last frame in the window
-                first_frame = frame_no - COMPOUND_BUFFER_LEN + 1
-                last_frame = frame_no + 1
-                frame_sequence = (first_frame, last_frame)
+    def add_gesture_class(self, gesture_class, frame_no):
+        self.gesture['classes'] += [gesture_class]
+        self.gesture['frames'] += [frame_no]
+        if len(self.gesture['frames']) >= self.compound_window_len:
+            self.gesture['is_full'] = True
 
-                # Slice the arrays for each recognition module
-                sequence_expr_classes, expr_frame_nos = get_sequence_labels(frame_sequence, expression_classes)
-                sequence_sound_classes, sound_frame_nos = get_sequence_labels(frame_sequence, sound_classes)
-                sequence_gesture_classes, _ = get_sequence_labels(frame_sequence, gesture_classes)
-                gesture_sequence = gesture_frame_sequences[first_frame:last_frame]
-
-                # Calculate compound feature vector from the sequence
-                fts, fts_valid = compute_feature_vector_compound(
-                    expr_frame_nos, sequence_expr_classes, nof_expr_classes,
-                    gesture_sequence, sequence_gesture_classes, nof_gesture_classes,
-                    sound_frame_nos, sequence_sound_classes, nof_sound_classes,
-                    frame_sequence, logger, frame_no)
-
-                # Reshape array for model prediction
-                fts = np.array(fts).reshape(1, -1)
-
-                # Compound model prediction, log the results
-                if compound_model is None or not fts_valid:
-                    class_nos = np.array([MISSING_CLASS], dtype=np.uint8)
-                    class_scores = np.array([0], dtype=np.float16)
-                else:
-                    class_nos = np.array(compound_model.predict(fts), dtype=np.uint8)
-                    class_scores = np.array(compound_model.decision_function(fts), dtype=np.float16).ravel()
-                log_compound_fts(logger, frame_no, fts, class_nos, class_scores)
-
-                # Send compound stream
-                timestamp = np.array([timestamp_gesture[0]], dtype=np.float64)
-                send_compound_stream(pub_socket, timestamp, class_nos)
-
-                # Write fts to file for testing
-                if WRITE_FEATURES_LABEL_TRAIN_TEST:
-                    write_feature_vector(np.concatenate((np.array([int(frame_no) + 1]).reshape((1, 1)), fts), axis=1),
-                                         class_nos[0], 'fts_compound_test', 'cl_compound_test')
-
-            # If end of video is reached, predict class as missing and stop this thread
-            if end_of_video(timestamp_face, timestamp_gesture, timestamp_sound):
-                class_nos = np.array([MISSING_CLASS], dtype=np.uint8)
-                timestamp = np.array([-1], dtype=np.float64)
-                send_compound_stream(pub_socket, timestamp, class_nos)
-                break
-
-        # End of thread
-
-        return class_nos
+    def add_face_class(self, face_class, frame_no):
+        self.face['classes'] += [face_class]
+        self.face['frames'] += [frame_no]
+        if len(self.face['frames']) >= self.compound_window_len:
+            self.face['is_full'] = True
 
 
 
-def load_compound_module(model_filename_compound):
-    if os.path.isfile(model_filename_compound):
-        with open(model_filename_compound, "rb") as file:
-            compound_model = pickle.load(file)
+#
+#
+#
+# class CompoundPrediction:
+#     def __init__(self, model_filename_compound, logger):
+#         with open(model_filename_pose, "rb") as file:
+#             self.pose_model = pickle.load(file)
+#         with open(model_filename_gesture, "rb") as file:
+#             self.gesture_model = pickle.load(file)
+#         self.nof_pose_classes = len(self.pose_model.classes_)
+#         self.logger = logger
+#         self.buffer_info = initialize_buffer_info()
+#
+#     def get(self, gesture, expression, sound):
+#
+#         # Load person dict and labels dict
+#         with open(os.path.join(base_for_person, person, ML_CAT, LABELLED_PERSON_FILENAME), 'r') as infile:
+#             person_dict = json.load(infile)
+#         label_json_filename = person_dict['labels_file']
+#         with open(label_json_filename, 'r') as infile:
+#             labels_dict = json.load(infile)
+#
+#         # Get nr of labels for each of the recognition modules -> face, gesture and sound
+#         nof_expr_classes, nof_gesture_classes, nof_sound_classes = get_nof_submodel_labels(labels_dict)
+#
+#         # Load compound model
+#         compound_model = load_model(person_dict['model_filename_compound'])
+#
+#         # Initialize empty arrays
+#         expression_frame_nos = []
+#         expression_classes = []
+#         gesture_frame_sequences = []
+#         gesture_classes = []
+#         sound_frame_nos = []
+#         sound_classes = []
+#
+#         # Initialize time_stamps
+#         if not INCLUDE_SOUND:
+#             timestamp_sound = [-1]
+#         if not INCLUDE_FACE_EXPR:
+#             timestamp_face = [-1]
+#         if not INCLUDE_GESTURE:
+#             timestamp_gesture = [-1]
+#
+#         # TODO Offset, timestamp_count should be constants?
+#         while True:
+#             # Filling in timestamp and class information related to face expression
+#             if INCLUDE_FACE_EXPR:
+#                 timestamp_face, _, class_face_nos, class_face_probs = get_class_stream(sub_face_socket,
+#                                                                                        offset=10,
+#                                                                                        timestamp_count=1)
+#                 expression_frame_nos += [(int(np.round(timestamp_face[0] * frame_rate)))]
+#                 expression_classes += [class_face_nos[0]]
+#
+#             # Filling in timestamp and class information related to gesture
+#             if INCLUDE_GESTURE:
+#                 timestamp_seq_gesture, _, class_gesture_nos, class_gesture_probs = get_class_stream(sub_gesture_socket,
+#                                                                                                     offset=8,
+#                                                                                                     timestamp_count=2)
+#                 timestamp_gesture = [timestamp_seq_gesture[1]]
+#                 gesture_frame_sequences += [[int(np.round(t * frame_rate)) for t in timestamp_seq_gesture]]
+#                 gesture_classes += [class_gesture_nos[0]]
+#
+#             # Filling in timestamp and class information related to sound expression
+#             if INCLUDE_SOUND:
+#                 timestamp_sound, _, class_sound_nos, class_sound_probs = get_class_stream(sub_sound_socket,
+#                                                                                           offset=6,
+#                                                                                           timestamp_count=1)
+#                 sound_frame_nos += [(int(np.round(timestamp_sound[0] * frame_rate)))]
+#                 sound_classes += [class_sound_nos[0]]
+#
+#             # Get frame number
+#             if INCLUDE_GESTURE:
+#                 frame_no = int(np.round(timestamp_gesture[0] * frame_rate))
+#             elif INCLUDE_FACE_EXPR:
+#                 frame_no = int(np.round(timestamp_face[0] * frame_rate))
+#             elif INCLUDE_SOUND:
+#                 frame_no = int(np.round(timestamp_sound[0] * frame_rate))
+#
+#             # Do compound recognition if buffer is long enough
+#             if do_compound_recognition(frame_no):
+#                 # Check that timestamp face and timestamp gesture are the same, otherwise AssertionError is raised
+#                 if INCLUDE_FACE_EXPR and INCLUDE_GESTURE:
+#                     assert abs(timestamp_face[0] - timestamp_gesture[0]) < 0.00001
+#
+#                 # Get window feature vector compound, current frame nr is the last frame in the window
+#                 first_frame = frame_no - COMPOUND_BUFFER_LEN + 1
+#                 last_frame = frame_no + 1
+#                 frame_sequence = (first_frame, last_frame)
+#
+#                 # Slice the arrays for each recognition module
+#                 sequence_expr_classes, expr_frame_nos = get_sequence_labels(frame_sequence, expression_classes)
+#                 sequence_sound_classes, sound_frame_nos = get_sequence_labels(frame_sequence, sound_classes)
+#                 sequence_gesture_classes, _ = get_sequence_labels(frame_sequence, gesture_classes)
+#                 gesture_sequence = gesture_frame_sequences[first_frame:last_frame]
+#
+#                 # Calculate compound feature vector from the sequence
+#                 fts, fts_valid = compute_feature_vector_compound(
+#                     expr_frame_nos, sequence_expr_classes, nof_expr_classes,
+#                     gesture_sequence, sequence_gesture_classes, nof_gesture_classes,
+#                     sound_frame_nos, sequence_sound_classes, nof_sound_classes,
+#                     frame_sequence, logger, frame_no)
+#
+#                 # Reshape array for model prediction
+#                 fts = np.array(fts).reshape(1, -1)
+#
+#                 # Compound model prediction, log the results
+#                 if compound_model is None or not fts_valid:
+#                     class_nos = np.array([MISSING_CLASS], dtype=np.uint8)
+#                     class_scores = np.array([0], dtype=np.float16)
+#                 else:
+#                     class_nos = np.array(compound_model.predict(fts), dtype=np.uint8)
+#                     class_scores = np.array(compound_model.decision_function(fts), dtype=np.float16).ravel()
+#                 log_compound_fts(logger, frame_no, fts, class_nos, class_scores)
+#
+#                 # Send compound stream
+#                 timestamp = np.array([timestamp_gesture[0]], dtype=np.float64)
+#                 send_compound_stream(pub_socket, timestamp, class_nos)
+#
+#                 # Write fts to file for testing
+#                 if WRITE_FEATURES_LABEL_TRAIN_TEST:
+#                     write_feature_vector(np.concatenate((np.array([int(frame_no) + 1]).reshape((1, 1)), fts), axis=1),
+#                                          class_nos[0], 'fts_compound_test', 'cl_compound_test')
+#
+#             # If end of video is reached, predict class as missing and stop this thread
+#             if end_of_video(timestamp_face, timestamp_gesture, timestamp_sound):
+#                 class_nos = np.array([MISSING_CLASS], dtype=np.uint8)
+#                 timestamp = np.array([-1], dtype=np.float64)
+#                 send_compound_stream(pub_socket, timestamp, class_nos)
+#                 break
+#
+#         # End of thread
+#
+#         return class_nos
+
+
+
+def load_model(model_filename):
+    if os.path.isfile(model_filename):
+        with open(model_filename, "rb") as file:
+            model = pickle.load(file)
     else:
-        print(model_filename_compound + ' does not exist')
-        compound_model = None
-    return compound_model
+        print(model_filename + ' does not exist')
+        model = None
+    return model
+
+
+def get_nof_model_labels(model_filename):
+    model = load_model(model_filename)
+    return len(model.classes_)
 
 
 def get_nof_submodel_labels(labels_dict):
@@ -216,7 +286,7 @@ def compute_one_hot_vector(sub_labels, frame_nos, sub_window, nof_classes, expre
     # The vector cl is transformed into a one-hot vector and the value one is assigned to the majority class
     if len(counts) != 0:
         idx = [i for i, c in enumerate(counts) if c == max(counts)][0]
-        majority_class = unique[idx]
+        majority_class = int(unique[idx])
         if majority_class < len(one_hot_vector) - 1:
             # The majority class is different from the MISSING_CLASS*
             one_hot_vector[majority_class] = 1
@@ -227,8 +297,9 @@ def compute_one_hot_vector(sub_labels, frame_nos, sub_window, nof_classes, expre
                 unique = [unique[i] for i, u in enumerate(unique) if not i == idx]
                 counts = [counts[i] for i, u in enumerate(counts) if not i == idx]
                 idx = [i for i, c in enumerate(counts) if c == max(counts)][0]
-                majority_class = unique[idx]
+                majority_class = int(unique[idx])
                 one_hot_vector[majority_class] = 1
+
             else:
                 # All classes are the MISSING_CLASS*, so the last element of cl (the element of the MISSING_CLASS*)
                 # is assigned to 1
@@ -402,6 +473,6 @@ def get_sequence_labels_gesture(frame_sequence, gesture_classes):
 def get_sequence_labels(frame_sequence, labels):
     (first_frame, last_frame) = frame_sequence
     sequence_frame_numbers = np.arange(first_frame, last_frame)
-    sequence_labels = np.array(labels[first_frame:last_frame], dtype=int)
+    sequence_labels = np.array(labels)[first_frame:last_frame]
     return sequence_labels, sequence_frame_numbers
 
