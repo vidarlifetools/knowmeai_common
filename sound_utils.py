@@ -83,15 +83,21 @@ class SoundPrediction:
             self.source_model = pickle.load(file)
         with open(model_filename_client, "rb") as file:
             self.client_model = pickle.load(file)
-        with open(model_filename_sound, "rb") as file:
-            self.sound_model = pickle.load(file)
+        if model_filename_sound:
+            with open(model_filename_sound, "rb") as file:
+                self.sound_model = pickle.load(file)
+        else:
+            self.sound_model = None
         self.histogram_limit = histogram_limit
         self.histogram_depth = histogram_depth
         self.histogram = np.zeros((histogram_depth, self.client_model.n_outputs_), dtype=float)
         self.hist_idx = 0
-        print(f"Histogram limit = {histogram_limit},histogram depth = {histogram_depth}")
 
     def get_class(self, ft):
+        valid, vector = self.get_vector(ft)
+        sound_class = self.sound_model.predict((vector,))
+        return valid, sound_class
+    def get_vector(self, ft):
         if len(ft) != 416:
             b = np.zeros((416 - len(ft),), dtype=float)
             ft = np.append(ft, b)
@@ -105,8 +111,8 @@ class SoundPrediction:
         if np.sum(vector) < self.histogram_limit:
             valid = False
             vector *= 0.0
-        sound_class = self.sound_model.predict((vector,))
-        return valid, sound_class
+        #print(f"Source {pred[0]}, client class {cl_cl}, vector {vector}")
+        return valid, vector
 
     def clear_histogram(self):
         self.histogram *= 0.0
